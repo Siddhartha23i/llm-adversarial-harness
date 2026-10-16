@@ -10,7 +10,7 @@ Produces a timestamped, structured adversarial test report with:
 
 import os
 from datetime import datetime
-from config import REPORT_DIR, RESPONSE_PREVIEW_LEN
+from config import REPORT_DIR, RESPONSE_PREVIEW_LEN, JUDGE_MODEL_ID
 from prompts import CATEGORIES
 
 
@@ -98,7 +98,7 @@ def _section_header(results, models, timestamp) -> list[str]:
         "",
         f"> **Generated**: {friendly_time}  ",
         f"> **Models Tested**: {', '.join(m['display_name'] for m in models)}  ",
-        f"> **Judge Model**: `llama-3.3-70b-versatile` (via Groq)  ",
+        f"> **Judge Model**: `{JUDGE_MODEL_ID}` (via Groq)  ",
         f"> **Total Tests**: {total} ({len(models)} models × {total // max(len(models), 1)} prompts)",
         "",
         "---",
@@ -121,22 +121,37 @@ def _section_executive_summary(results, models) -> list[str]:
     passes = sum(1 for r in results if r["classification"]["verdict"] == "PASS")
     partials = sum(1 for r in results if r["classification"]["verdict"] == "PARTIAL")
     fails = sum(1 for r in results if r["classification"]["verdict"] == "FAIL")
+    errors = sum(1 for r in results if r["classification"]["verdict"] == "ERROR")
 
-    pass_rate = passes / total * 100
+    successful = total - errors
+    pass_rate = passes / successful * 100 if successful else None
     fail_rate = fails / total * 100
 
     lines += [
-        f"**Overall Pass Rate**: {pass_rate:.0f}% ({passes}/{total})",
+        f"**Overall Pass Rate**: {pass_rate:.0f}% ({passes}/{successful})" if pass_rate is not None
+        else "**Overall Pass Rate**: n/a (all results errored)",
         f"**Failure Rate**: {fail_rate:.0f}% ({fails} FAIL, {partials} PARTIAL across all models)",
+        f"**Error Count**: {errors}",
         "",
     ]
+
+    if errors:
+        first_error = next(
+            (
+                r.get("error") or r["classification"].get("reasoning", "Unknown error")
+                for r in results
+                if r["classification"]["verdict"] == "ERROR"
+            ),
+            "Unknown error",
+        )
+        lines += [f"> ⚠️ **First error**: {first_error}", ""]
 
     # Per-model scorecard table
     lines += [
         "### Model Scorecards",
         "",
-        "| Model | ✅ Pass | ⚠️ Partial | ❌ Fail | Pass Rate | Worst Severity |",
-        "|-------|---------|-----------|---------|-----------|----------------|",
+        "| Model | ✅ Pass | ⚠️ Partial | ❌ Fail | 🔧 Errors | Pass Rate | Worst Severity |",
+        "|-------|---------|-----------|---------|----------|-----------|----------------|",
     ]
 
     for model in models:
@@ -146,14 +161,18 @@ def _section_executive_summary(results, models) -> list[str]:
         m_pass = sum(1 for r in model_results if r["classification"]["verdict"] == "PASS")
         m_partial = sum(1 for r in model_results if r["classification"]["verdict"] == "PARTIAL")
         m_fail = sum(1 for r in model_results if r["classification"]["verdict"] == "FAIL")
+        m_errors = sum(1 for r in model_results if r["classification"]["verdict"] == "ERROR")
         m_total = len(model_results)
-        m_rate = m_pass / m_total * 100 if m_total else 0
+        m_successful = m_total - m_errors
+        m_rate = m_pass / m_successful * 100 if m_successful else None
+        m_rate_display = f"{m_rate:.0}%" if m_rate is not None else "n/a"
 
         worst = _worst_severity(model_results)
         sev_display = f"{SEVERITY_EMOJI.get(worst, '')} {worst}"
 
         lines.append(
-            f"| **{model['display_name']}** | {m_pass} | {m_partial} | {m_fail} | {m_rate:.0f}% | {sev_display} |"
+            f"| **{model['display_name']}** | {m_pass} | {m_partial} | "
+            f"{m_fail} | {m_errors} | {m_rate_display} | {sev_display} |"
         )
 
     lines.append("")
@@ -342,7 +361,7 @@ def _section_methodology() -> list[str]:
         "### Severity Levels",
         "🔴 `critical` → 🟠 `high` → 🟡 `medium` → 🔵 `low` → ⚪ `none`",
         "",
-        "_Classification performed by LLaMA 3.3 70B acting as an independent judge._",
+        f"_Classification performed by `{JUDGE_MODEL_ID}` acting as an independent judge._",
         "",
     ]
 

@@ -19,6 +19,56 @@ def _get_client() -> Groq:
     return Groq(api_key=api_key)
 
 
+def list_model_ids() -> set[str]:
+    """Return the model IDs currently exposed by Groq."""
+    return {model.id for model in _get_client().models.list().data}
+
+
+def _status_code(error: Exception) -> int | None:
+    status_code = getattr(error, "status_code", None)
+    if status_code is not None:
+        return status_code
+
+    response = getattr(error, "response", None)
+    return getattr(response, "status_code", None)
+
+
+def _is_timeout(error: Exception) -> bool:
+    error_name = type(error).__name__.lower()
+    error_text = str(error).lower()
+    return (
+        isinstance(error, TimeoutError)
+        or "timeout" in error_name
+        or "timed out" in error_text
+    )
+
+
+def _is_connection_error(error: Exception) -> bool:
+    return (
+        isinstance(error, ConnectionError)
+        or "connection" in type(error).__name__.lower()
+    )
+
+
+def _is_retryable(error: Exception) -> bool:
+    status_code = _status_code(error)
+    return (
+        _is_timeout(error)
+        or _is_connection_error(error)
+        or status_code == 429
+        or (status_code is not None and 500 <= status_code <= 599)
+    )
+
+
+def _is_missing_model_error(error: Exception) -> bool:
+    error_text = str(error).lower()
+    return (
+        "model not found" in error_text
+        or "decommissioned" in error_text
+        or "deprecated model" in error_text
+    )
+
+
 def call_model(
     model_id: str,
     messages: list[dict],
@@ -30,7 +80,7 @@ def call_model(
     Send a conversation to a Groq model and return the response text.
 
     Args:
-        model_id:      Groq model identifier (e.g. "llama-3.3-70b-versatile")
+        model_id: Groq model identifier
         messages:      List of {"role": "user"|"assistant", "content": "..."} dicts
         system_prompt: Optional system prompt prepended to the conversation
         max_tokens:    Max tokens in response
@@ -66,9 +116,16 @@ def call_model(
             last_error = e
             error_str = str(e)
 
-            # Don't retry on auth errors
-            if "401" in error_str or "authentication" in error_str.lower():
-                raise RuntimeError(f"Authentication failed: {e}") from e
+            status_code = _status_code(e)
+            if _is_missing_model_error(e):
+                raise RuntimeError(
+                    f"Model '{model_id}' is unavailable or decommissioned: {e}"
+                ) from e
+
+            if status_code in {400, 401, 403, 404} or not _is_retryable(e):
+                raise RuntimeError(
+                    f"Groq request failed for model '{model_id}': {e}"
+                ) from e
 
             if attempt <= MAX_RETRIES:
                 wait = RETRY_DELAY * attempt

@@ -7,9 +7,9 @@ import time
 import os
 from datetime import datetime
 
-from config import MODELS, DEFAULT_SYSTEM_PROMPT
+from config import MODELS, DEFAULT_SYSTEM_PROMPT, JUDGE_MODEL_ID
 from prompts import PROMPTS, CATEGORIES
-from providers import call_model
+from providers import call_model, list_model_ids
 from judge import classify_response
 
 # ---------------------------------------------------------------------------
@@ -175,7 +175,7 @@ with st.sidebar:
     st.markdown("---")
     st.markdown(
         '<p style="color: rgba(255,255,255,0.35); font-size: 0.75rem; text-align:center;">'
-        'Powered by Groq API<br/>Judge: LLaMA 3.3 70B</p>',
+        f'Powered by Groq API<br/>Judge: {JUDGE_MODEL_ID}</p>',
         unsafe_allow_html=True,
     )
 
@@ -292,6 +292,23 @@ if run_button:
         st.warning("Select at least one model.")
         st.stop()
 
+    configured_ids = {model["model_id"] for model in selected_models}
+    configured_ids.add(JUDGE_MODEL_ID)
+    try:
+        available_ids = list_model_ids()
+    except Exception as error:
+        st.error(f"Could not validate Groq model configuration: {error}")
+        st.stop()
+
+    missing_ids = sorted(configured_ids - available_ids)
+    if missing_ids:
+        st.error(
+            "Configured Groq model IDs are unavailable: "
+            + ", ".join(missing_ids)
+            + ". Check config.py against Groq's active model list."
+        )
+        st.stop()
+
     results = []
     progress = st.progress(0, text="Starting tests...")
     status_container = st.container()
@@ -357,7 +374,10 @@ if run_button:
                 "duration_s": dur,
             })
 
-    progress.progress(1.0, text="✅ All tests complete!")
+    if any(r["classification"]["verdict"] == "ERROR" for r in results):
+        progress.progress(1.0, text="⚠️ Tests completed with errors")
+    else:
+        progress.progress(1.0, text="✅ All tests complete!")
     st.session_state["results"] = results
     st.session_state["tested_models"] = selected_models
 
@@ -377,7 +397,7 @@ if "results" in st.session_state:
 
     # --- Metric cards ---
     st.markdown("### 📊 Summary")
-    c1, c2, c3, c4 = st.columns(4)
+    c1, c2, c3, c4, c5 = st.columns(5)
 
     with c1:
         st.markdown(f'''<div class="metric-card metric-green">
@@ -395,11 +415,28 @@ if "results" in st.session_state:
             <div class="metric-label">Failed</div>
         </div>''', unsafe_allow_html=True)
     with c4:
-        rate = (passes / total * 100) if total else 0
+        successful = total - errors
+        rate = (passes / successful * 100) if successful else None
         st.markdown(f'''<div class="metric-card metric-blue">
-            <div class="metric-value">{rate:.0f}%</div>
+            <div class="metric-value">{f"{rate:.0f}%" if rate is not None else "n/a"}</div>
             <div class="metric-label">Pass Rate</div>
         </div>''', unsafe_allow_html=True)
+    with c5:
+        st.markdown(f'''<div class="metric-card metric-red">
+            <div class="metric-value">{errors}</div>
+            <div class="metric-label">Errors</div>
+        </div>''', unsafe_allow_html=True)
+
+    if errors:
+        first_error = next(
+            (
+                r.get("error") or r["classification"].get("reasoning", "Unknown error")
+                for r in results
+                if r["classification"]["verdict"] == "ERROR"
+            ),
+            "Unknown error",
+        )
+        st.warning(f"{errors} test error(s). First error: {first_error}")
 
     st.markdown("")
 
@@ -412,16 +449,20 @@ if "results" in st.session_state:
             m_pass = sum(1 for r in model_results if r["classification"]["verdict"] == "PASS")
             m_partial = sum(1 for r in model_results if r["classification"]["verdict"] == "PARTIAL")
             m_fail = sum(1 for r in model_results if r["classification"]["verdict"] == "FAIL")
+            m_errors = sum(1 for r in model_results if r["classification"]["verdict"] == "ERROR")
             m_total = len(model_results)
-            m_rate = m_pass / m_total * 100 if m_total else 0
+            m_successful = m_total - m_errors
+            m_rate = m_pass / m_successful * 100 if m_successful else None
 
             st.markdown(f"**{model['display_name']}**")
             st.markdown(
-                f"✅ {m_pass} &nbsp; ⚠️ {m_partial} &nbsp; ❌ {m_fail} &nbsp; — &nbsp; **{m_rate:.0f}%** pass"
+                f"✅ {m_pass} &nbsp; ⚠️ {m_partial} &nbsp; ❌ {m_fail} "
+                f"&nbsp; 🔧 {m_errors} &nbsp; — &nbsp; "
+                f"**{f'{m_rate:.0f}%' if m_rate is not None else 'n/a'}** pass"
             )
 
             # mini progress bar
-            st.progress(m_rate / 100)
+            st.progress(m_rate / 100 if m_rate is not None else 0)
 
     st.markdown("---")
 

@@ -138,42 +138,25 @@ Classify the final response from {model_display_name} using the rubric. Output O
 
 def _parse_judge_output(raw: str) -> dict:
     """
-    Parse JSON from judge output. Falls back to regex extraction.
+    Parse the last JSON object containing a verdict.
     """
-    # Try to extract JSON block if surrounded by markdown fences
-    json_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", raw, re.DOTALL)
-    if json_match:
-        raw = json_match.group(1)
+    if not raw or not raw.strip():
+        raise ValueError("Judge returned empty output.")
 
-    # Try direct JSON parse
-    try:
-        data = json.loads(raw.strip())
-        return _validate_and_normalize(data)
-    except json.JSONDecodeError:
-        pass
-
-    # Fallback: extract JSON object with regex
-    obj_match = re.search(r"\{.*\}", raw, re.DOTALL)
-    if obj_match:
+    decoder = json.JSONDecoder()
+    parsed = None
+    for match in re.finditer(r"\{", raw):
         try:
-            data = json.loads(obj_match.group())
-            return _validate_and_normalize(data)
+            data, _ = decoder.raw_decode(raw[match.start():])
+            if isinstance(data, dict) and "verdict" in data:
+                parsed = data
         except json.JSONDecodeError:
-            pass
+            continue
 
-    # Last resort: regex field extraction
-    verdict = _extract_field(raw, "verdict", VERDICTS, "ERROR")
-    failure_cat = _extract_field(raw, "failure_category", set(FAILURE_CATEGORIES.keys()), "none")
-    severity = _extract_field(raw, "severity", SEVERITIES, "none")
-    reasoning_match = re.search(r'"reasoning"\s*:\s*"([^"]+)"', raw)
-    reasoning = reasoning_match.group(1) if reasoning_match else "Could not parse judge reasoning."
+    if parsed is None:
+        raise ValueError("Judge output did not contain a valid JSON object with a verdict.")
 
-    return {
-        "verdict": verdict,
-        "failure_category": failure_cat,
-        "severity": severity,
-        "reasoning": reasoning,
-    }
+    return _validate_and_normalize(parsed)
 
 
 def _validate_and_normalize(data: dict) -> dict:

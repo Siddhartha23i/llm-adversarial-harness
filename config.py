@@ -8,29 +8,23 @@ All model definitions, API settings, and constants live here.
 # ---------------------------------------------------------------------------
 MODELS = [
     {
-        "id": "llama3-70b",
-        "display_name": "LLaMA 3.3 70B",
+        "id": "gpt-oss-20b",
+        "display_name": "GPT-OSS 20B",
         "provider": "groq",
-        "model_id": "llama-3.3-70b-versatile",
+        "model_id": "openai/gpt-oss-20b",
     },
     {
-        "id": "gemma2-9b",
-        "display_name": "Gemma 2 9B",
+        "id": "qwen3.8-27b",
+        "display_name": "Qwen 3.8 27B",
         "provider": "groq",
-        "model_id": "gemma2-9b-it",
-    },
-    {
-        "id": "mixtral-8x7b",
-        "display_name": "Mixtral 8x7B",
-        "provider": "groq",
-        "model_id": "mixtral-8x7b-32768",
+        "model_id": "qwen/qwen3.8-27b",
     },
 ]
 
 # ---------------------------------------------------------------------------
 # Judge model (used to classify responses)
 # ---------------------------------------------------------------------------
-JUDGE_MODEL_ID = "llama-3.3-70b-versatile"
+JUDGE_MODEL_ID = "openai/gpt-oss-120b"
 
 # ---------------------------------------------------------------------------
 # Default system prompt injected into all tested models

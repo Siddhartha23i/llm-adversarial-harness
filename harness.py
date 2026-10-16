@@ -6,7 +6,7 @@ Usage:
 
 Options:
     --models     Comma-separated model IDs to test (default: all)
-                 Choices: llama3-70b, gemma2-9b, mixtral-8x7b
+                 Choices: gpt-oss-20b, qwen3.8-27b
     --category   Run only prompts in this category
                  Choices: jailbreak, prompt_injection, instruction_conflict,
                           multi_turn, calibration
@@ -32,9 +32,9 @@ from datetime import datetime
 from dotenv import load_dotenv
 
 import config
-from config import MODELS, DEFAULT_SYSTEM_PROMPT
+from config import MODELS, DEFAULT_SYSTEM_PROMPT, JUDGE_MODEL_ID
 from prompts import PROMPTS, CATEGORIES
-from providers import call_model
+from providers import call_model, list_model_ids
 from judge import classify_response
 from reporter import generate_report
 
@@ -138,6 +138,31 @@ def select_prompts(category_arg) -> list:
     return [p for p in PROMPTS if p["category"] == category_arg]
 
 
+def validate_configured_models(selected_models: list[dict], include_judge: bool) -> None:
+    """Fail before testing if selected model IDs are absent from Groq."""
+    configured = {model["model_id"] for model in selected_models}
+    if include_judge:
+        configured.add(JUDGE_MODEL_ID)
+
+    try:
+        available = list_model_ids()
+    except Exception as error:
+        print(RED(f"Could not validate Groq model configuration: {error}"), file=sys.stderr)
+        sys.exit(1)
+
+    missing = sorted(configured - available)
+    if missing:
+        print(
+            RED(
+                "Configured Groq model IDs are unavailable: "
+                + ", ".join(missing)
+                + ". Check config.py against Groq's active model list."
+            ),
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+
 def run_test(prompt: dict, model: dict, verbose: bool, dry_run: bool, no_judge: bool) -> dict:
     """
     Run a single prompt against a single model, then judge the response.
@@ -221,6 +246,9 @@ def main() -> None:
     selected_models = select_models(args.models)
     selected_prompts = select_prompts(args.category)
 
+    if not args.dry_run:
+        validate_configured_models(selected_models, include_judge=not args.no_judge)
+
     total_tests = len(selected_models) * len(selected_prompts)
     cat_filter = f"(filtered: {args.category})" if args.category else ""
 
@@ -232,7 +260,7 @@ def main() -> None:
     print(f"  Models  : {', '.join(m['display_name'] for m in selected_models)}")
     print(f"  Prompts : {len(selected_prompts)} {cat_filter}")
     print(f"  Total   : {total_tests} tests")
-    print(f"  Judge   : {'disabled (--no-judge)' if args.no_judge else 'llama-3.3-70b-versatile'}")
+    print(f"  Judge   : {'disabled (--no-judge)' if args.no_judge else JUDGE_MODEL_ID}")
     print(f"  Mode    : {'DRY RUN' if args.dry_run else 'LIVE'}")
     print()
     print(DIM("-" * 80))
